@@ -49,12 +49,14 @@ pip install numpy matplotlib pandas
 ```
 ## Project Structure
 
+```bash
 sat_solver_benchmark/
 │
 ├── benchmarks/              # Directory containing the benchmark CNF files
 ├── results/                 # Directory where benchmark results and plots will be saved
 ├── sat_solver.py            # Main script implementing the solvers
 └── README.md                # This file
+```
 
 ## Output (Example)
 ```python
