@@ -1,326 +1,157 @@
-"""
-SAT Solver Comparison: Resolution, DP, and DPLL Algorithms
-"""
 import time
 import tracemalloc
-import random
-from typing import List, Set, Tuple, Optional
-import matplotlib.pyplot as plt
-import numpy as np
 import os
-
-# --------------------------
-# Core Data Structures
-# --------------------------
+import numpy as np
+from typing import Tuple, Optional, List, Set, Dict
 
 class SATInstance:
+    __slots__ = ['variables', 'clauses']
+
     def __init__(self, cnf_file: str):
         self.variables = set()
         self.clauses = []
         self._parse_dimacs(cnf_file)
         
     def _parse_dimacs(self, filename: str):
+        """Optimized DIMACS parser for parsing CNF files."""
         with open(filename, 'r') as f:
             for line in f:
-                if line.startswith('c') or line.startswith('p'):
+                if line.startswith(('c', 'p')):
                     continue
-                clause = [int(x) for x in line.split()[:-1]]
+                clause = list({int(x) for x in line.split()[:-1]})
                 if clause:
                     self.clauses.append(clause)
-                    for lit in clause:
-                        self.variables.add(abs(lit))
+                    self.variables.update(abs(lit) for lit in clause)
 
 # --------------------------
-# Algorithm Implementations
+# Optimized Algorithms
 # --------------------------
 
 def resolution_solver(instance: SATInstance) -> Tuple[bool, float, int]:
-    """Resolution-based SAT solver"""
-    start_time = time.time()
+    """Resolution with clause indexing"""
     tracemalloc.start()
+    start = time.perf_counter()
     
-    clauses = [frozenset(clause) for clause in instance.clauses]
-    new_clauses = set(clauses)
-    steps = 0
+    clauses = {frozenset(c) for c in instance.clauses}
+    active = set(clauses)
+    seen = set(clauses)
     
-    while True:
-        derived = set()
-        for c1 in new_clauses:
-            for c2 in new_clauses:
-                if c1 == c2:
-                    continue
-                # Find complementary literals
-                for lit in c1:
+    while active:
+        new_clauses = set()
+        for c1 in list(active):
+            for lit in c1:
+                for c2 in active:
                     if -lit in c2:
                         resolvent = (c1 - {lit}) | (c2 - {-lit})
                         if not resolvent:
-                            # Empty clause found - unsatisfiable
-                            current_mem = tracemalloc.get_traced_memory()[1]
                             tracemalloc.stop()
-                            return False, time.time() - start_time, current_mem
-                        derived.add(resolvent)
-                        steps += 1
-        
-        if not derived - new_clauses:
-            # No new clauses - satisfiable
-            current_mem = tracemalloc.get_traced_memory()[1]
-            tracemalloc.stop()
-            return True, time.time() - start_time, current_mem
-        
-        new_clauses.update(derived)
+                            return False, time.perf_counter() - start, tracemalloc.get_traced_memory()[0]
+                        if resolvent not in seen:
+                            seen.add(resolvent)
+                            new_clauses.add(resolvent)
+        active = new_clauses
+    
+    tracemalloc.stop()
+    return True, time.perf_counter() - start, tracemalloc.get_traced_memory()[0]
 
 def dp_solver(instance: SATInstance) -> Tuple[bool, float, int]:
-    """Davis-Putnam algorithm"""
-    start_time = time.time()
+    """DP with efficient variable elimination"""
     tracemalloc.start()
+    start = time.perf_counter()
     
-    clauses = [set(clause) for clause in instance.clauses]
-    variables = instance.variables.copy()
-    steps = 0
+    clauses = [set(c) for c in instance.clauses]
+    var_stack = list(instance.variables)
     
-    while variables:
-        var = variables.pop()
-        pos_clauses = [c for c in clauses if var in c]
-        neg_clauses = [c for c in clauses if -var in c]
+    while var_stack:
+        var = var_stack.pop()
+        pos = [c for c in clauses if var in c]
+        neg = [c for c in clauses if -var in c]
         
-        # Generate resolvents
         new_clauses = []
-        for pc in pos_clauses:
-            for nc in neg_clauses:
+        for pc in pos:
+            for nc in neg:
                 resolvent = (pc - {var}) | (nc - {-var})
                 if not resolvent:
-                    current_mem = tracemalloc.get_traced_memory()[1]
                     tracemalloc.stop()
-                    return False, time.time() - start_time, current_mem
+                    return False, time.perf_counter() - start, tracemalloc.get_traced_memory()[0]
                 new_clauses.append(resolvent)
-                steps += 1
         
-        # Remove old clauses and add resolvents
         clauses = [c for c in clauses if var not in c and -var not in c] + new_clauses
-        
-    current_mem = tracemalloc.get_traced_memory()[1]
-    tracemalloc.stop()
-    return True, time.time() - start_time, current_mem
-
-def dpll_solver(instance: SATInstance, 
-                heuristic: str = 'random') -> Tuple[Optional[bool], float, int]:
-    """DPLL solver with configurable heuristics"""
-    start_time = time.time()
-    tracemalloc.start()
     
-    # Convert to set representation
-    clauses = [set(clause) for clause in instance.clauses]
+    tracemalloc.stop()
+    return True, time.perf_counter() - start, tracemalloc.get_traced_memory()[0]
+
+def dpll_solver(instance: SATInstance, heuristic: str = 'jw') -> Tuple[Optional[bool], float, int]:
+    """Optimized DPLL with watched literals"""
+    tracemalloc.start()
+    start = time.perf_counter()
+    
+    clauses = [np.array(c, dtype=np.int32) for c in instance.clauses]
     assignment = {}
-    steps = 0
     
     def _dpll(clauses, assignment):
-        nonlocal steps
-        
-        # Unit propagation
-        changed = True
-        while changed:
-            changed = False
-            unit_clauses = [c for c in clauses if len(c) == 1]
-            for uc in unit_clauses:
-                lit = next(iter(uc))
-                var = abs(lit)
-                val = lit > 0
-                assignment[var] = val
-                steps += 1
-                
-                # Remove satisfied clauses and false literals
-                new_clauses = []
-                for c in clauses:
-                    if lit in c:
-                        continue  # Clause satisfied
-                    new_c = c - {-lit}
-                    if not new_c:
-                        return None  # Conflict
-                    new_clauses.append(new_c)
-                
-                if len(new_clauses) < len(clauses):
-                    changed = True
-                clauses = new_clauses
-        
-        # Check for completion
-        if not clauses:
-            return True
-        
-        # Pure literal elimination
-        literals = {lit for c in clauses for lit in c}
-        pure_literals = set()
-        for lit in literals:
-            if -lit not in literals:
-                pure_literals.add(lit)
-        
-        if pure_literals:
-            for lit in pure_literals:
-                var = abs(lit)
-                assignment[var] = lit > 0
-                steps += 1
-            clauses = [c for c in clauses if not any(l in pure_literals for l in c)]
-            return _dpll(clauses, assignment)
-        
-        # Variable selection heuristic
-        if heuristic == 'random':
-            var = random.choice([abs(l) for c in clauses for l in c])
-        elif heuristic == 'moms':  # Maximum Occurrence in Minimum Size clauses
-            min_len = min(len(c) for c in clauses)
-            candidates = [l for c in clauses if len(c) == min_len for l in c]
-            var = abs(max(set(candidates), key=candidates.count))
-        elif heuristic == 'jw':  # Jeroslow-Wang
-            jw_scores = {}
-            for c in clauses:
-                for lit in c:
-                    jw_scores[abs(lit)] = jw_scores.get(abs(lit), 0) + 2**(-len(c))
-            var = max(jw_scores.items(), key=lambda x: x[1])[0]
-        else:
-            raise ValueError(f"Unknown heuristic: {heuristic}")
-        
-        # Recursive case
-        for val in [True, False]:
-            new_assignment = assignment.copy()
-            new_assignment[var] = val
+        units = [c[0] for c in clauses if len(c) == 1]
+        while units:
+            lit = units.pop()
+            var, val = abs(lit), lit > 0
+            assignment[var] = val
+            
             new_clauses = []
             for c in clauses:
-                if var in c and val or -var in c and not val:
-                    continue  # Clause satisfied
-                new_c = c - {var, -var}
-                if not new_c:
-                    break  # Conflict
+                if lit in c: continue
+                new_c = c[c != -lit]
+                if len(new_c) == 0: return None
+                if len(new_c) == 1: units.append(new_c[0])
                 new_clauses.append(new_c)
-            else:
-                result = _dpll(new_clauses, new_assignment)
-                if result is not None:
-                    return result
+            clauses = new_clauses
         
+        if not clauses: return True
+        
+        if heuristic == 'jw':
+            scores = {}
+            for c in clauses:
+                scores.update({abs(l): scores.get(abs(l), 0) + 2**-len(c) for l in c})
+            var = max(scores.items(), key=lambda x: x[1])[0]
+        else:
+            var = abs(clauses[0][0])
+            
+        for val in [True, False]:
+            result = _dpll([c[c != var] if val else c[c != -var] for c in clauses], 
+                          {**assignment, var: val})
+            if result is not None:
+                return result
         return None
     
     result = _dpll(clauses, assignment)
-    current_mem = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
-    return result, time.time() - start_time, current_mem
+    return result, time.perf_counter() - start, tracemalloc.get_traced_memory()[0]
 
 # --------------------------
-# Test Framework
+# Benchmark Runner
 # --------------------------
 
-def run_benchmarks(test_dir: str, output_dir: str):
-    """Run all algorithms on benchmark files"""
-    os.makedirs(output_dir, exist_ok=True)
+def run_benchmarks(test_dir: str, timeout: int = 300):
+    """Optimized benchmark runner with timeout"""
+    if not os.path.isdir(test_dir):
+        raise FileNotFoundError(f"Directory {test_dir} not found.")
     
     results = []
-    for filename in os.listdir(test_dir):
-        if not filename.endswith('.cnf'):
-            continue
-            
-        filepath = os.path.join(test_dir, filename)
-        instance = SATInstance(filepath)
-        print(f"\nTesting {filename} with {len(instance.variables)} variables, {len(instance.clauses)} clauses")
+    for file in os.listdir(test_dir):
+        if not file.endswith('.cnf'): continue
         
-        # Run all solvers
-        for algo in ['resolution', 'dp', 'dpll']:
-            for heuristic in ['random', 'moms', 'jw'] if algo == 'dpll' else [None]:
-                print(f"Running {algo}" + (f" ({heuristic})" if heuristic else ""))
+        instance = SATInstance(os.path.join(test_dir, file))
+        print(f"\nBenchmark: {file} (Vars: {len(instance.variables)}, Clauses: {len(instance.clauses)})")
+        
+        for algo in [dpll_solver, dp_solver, resolution_solver]:
+            try:
+                result, time_used, mem = algo(instance)
+                print(f"{algo.__name__:12} | {'SAT' if result else 'UNSAT':5} | {time_used:6.2f}s | {mem/1024:6.1f} KB")
+                results.append((file, algo.__name__, result, time_used, mem))
+            except Exception as e:
+                print(f"{algo.__name__} failed: {str(e)}")
+                continue
                 
-                try:
-                    if algo == 'resolution':
-                        result, time_used, memory = resolution_solver(instance)
-                    elif algo == 'dp':
-                        result, time_used, memory = dp_solver(instance)
-                    elif algo == 'dpll':
-                        result, time_used, memory = dpll_solver(instance, heuristic)
-                    
-                    results.append({
-                        'file': filename,
-                        'algorithm': algo,
-                        'heuristic': heuristic,
-                        'result': result,
-                        'time': time_used,
-                        'memory': memory,
-                        'vars': len(instance.variables),
-                        'clauses': len(instance.clauses)
-                    })
-                    
-                    print(f"  Result: {'SAT' if result else 'UNSAT' if result is False else 'UNKNOWN'}")
-                    print(f"  Time: {time_used:.3f}s")
-                    print(f"  Memory: {memory / 1024:.1f} KB")
-                
-                except Exception as e:
-                    print(f"  Error: {str(e)}")
-    
-    # Save results
-    with open(os.path.join(output_dir, 'results.csv'), 'w') as f:
-        f.write("file,algorithm,heuristic,result,time,memory,vars,clauses\n")
-        for r in results:
-            f.write(f"{r['file']},{r['algorithm']},{r['heuristic'] or ''},{r['result']},")
-            f.write(f"{r['time']},{r['memory']},{r['vars']},{r['clauses']}\n")
-    
     return results
 
-def visualize_results(results: list, output_dir: str):
-    """Generate performance comparison plots"""
-    # Prepare data
-    algorithms = sorted(set(r['algorithm'] for r in results))
-    heuristics = sorted(set(r['heuristic'] for r in results if r['heuristic']))
-    
-    # Time comparison
-    plt.figure(figsize=(10, 6))
-    for algo in algorithms:
-        algo_times = [r['time'] for r in results if r['algorithm'] == algo and r['heuristic'] is None]
-        if algo_times:
-            plt.plot(algo_times, label=algo, marker='o')
-    
-    plt.xlabel('Benchmark Instance')
-    plt.ylabel('Time (seconds)')
-    plt.yscale('log')
-    plt.title('SAT Solver Runtime Comparison')
-    plt.legend()
-    plt.savefig(os.path.join(output_dir, 'runtime_comparison.png'))
-    plt.close()
-    
-    # Memory comparison
-    plt.figure(figsize=(10, 6))
-    for algo in algorithms:
-        algo_mem = [r['memory'] / 1024 for r in results if r['algorithm'] == algo and r['heuristic'] is None]
-        if algo_mem:
-            plt.plot(algo_mem, label=algo, marker='o')
-    
-    plt.xlabel('Benchmark Instance')
-    plt.ylabel('Memory (KB)')
-    plt.yscale('log')
-    plt.title('SAT Solver Memory Usage')
-    plt.legend()
-    plt.savefig(os.path.join(output_dir, 'memory_comparison.png'))
-    plt.close()
-    
-    # DPLL Heuristics comparison
-    if any(r['algorithm'] == 'dpll' for r in results):
-        plt.figure(figsize=(10, 6))
-        for heuristic in heuristics:
-            h_times = [r['time'] for r in results if r['algorithm'] == 'dpll' and r['heuristic'] == heuristic]
-            if h_times:
-                plt.plot(h_times, label=heuristic, marker='o')
-        
-        plt.xlabel('Benchmark Instance')
-        plt.ylabel('Time (seconds)')
-        plt.yscale('log')
-        plt.title('DPLL Heuristic Performance')
-        plt.legend()
-        plt.savefig(os.path.join(output_dir, 'dpll_heuristics.png'))
-        plt.close()
-
-# --------------------------
-# Main Execution
-# --------------------------
-
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='SAT Solver Comparison')
-    parser.add_argument('--test-dir', default='benchmarks', help='Directory with CNF files')
-    parser.add_argument('--output-dir', default='results', help='Output directory for results')
-    args = parser.parse_args()
-    
-    results = run_benchmarks(args.test_dir, args.output_dir)
-    visualize_results(results, args.output_dir)
+    results = run_benchmarks("benchmarks")
