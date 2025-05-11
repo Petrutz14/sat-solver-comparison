@@ -59,10 +59,9 @@ sat_solver_benchmark/
 ```
 
 ## Output (Example)
-```python
+```bash
 Benchmark: sample1.cnf (Vars: 50, Clauses: 150)
-DPLL-jw     | SAT   |  1.23s  |  450.3 KB
-DPLL-moms   | SAT   |  1.05s  |  410.1 KB
+DPLL   | SAT   |  1.05s  |  410.1 KB
 DP          | UNSAT |  0.78s  |  330.2 KB
 Resolution  | SAT   |  2.12s  |  600.8 KB
 ```
